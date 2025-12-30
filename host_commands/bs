@@ -1,0 +1,18 @@
+#!/bin/bash
+
+container_prefix="ddev-$DDEV_PROJECT"
+current_dir=${PWD##*/}
+current_dir_full=${PWD}
+app_root_in_web_container=$(ddev exec echo "\$DDEV_COMPOSER_ROOT/$DDEV_DOCROOT")
+app_root_in_host=$DDEV_APPROOT/$DDEV_DOCROOT
+theme_dir_in_container="${current_dir_full/$app_root_in_host/$app_root_in_web_container}"
+
+if [ -f "$current_dir.backstop.json" ]; then
+    docker cp $container_prefix-web:$theme_dir_in_container/$current_dir.backstop.json $DDEV_APPROOT/$current_dir.backstop.json
+    docker cp $current_dir.backstop.json $container_prefix-backstop:/src
+    rm $DDEV_APPROOT/$current_dir.backstop.json
+    ddev backstop --config=$current_dir.backstop.json "$@"
+else
+    echo "This command should be run from the dir that contains [THEME_NAME].backstop.json, usually a theme's root dir."
+fi
+

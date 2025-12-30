@@ -1,0 +1,168 @@
+#!/bin/bash
+
+# This script setups a new site inside this Drupal project ready for development.
+# IT SHOULD BE RUN FROM THE PROJECT ROOT, otherwise some commands will fail.
+# It installs and configures automatically:
+# - PHPCS (PHP code sniffer)
+# - ESLint (Javascript lint)
+# - stylelint (CSS lint)
+# - Tailwindcss
+# - Browsersync
+# - BackstopJS
+# - Solr
+# - PHPMyAdmin
+
+# It's single-site by default, but it can handle a multisite setup.
+
+# Example of usage for a single-site:
+#   ddev setup
+
+# Example of usage for a multisite (domain name format expected):
+#   ddev my-site.com my-other-site.com
+
+#region STEP 1 - Validate arguments then install yq and jq packages for manipulating JSON and YML files.
+if [ $(basename "$(pwd)") != "$DDEV_PROJECT" ]; then
+  echo "It seems you're not running the script from the project directory, please go to the project directory (above the doc root) then try again."
+  exit 1
+fi
+IS_MULTISITE=false
+DOMAIN_REGEX='^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
+if [ $# -gt 0 ]; then
+  IS_MULTISITE=true
+  for arg in "$@"; do
+      if [[ ! "$arg" =~ $DOMAIN_REGEX ]]; then
+        echo "Error: '$arg' is not a valid domain format. Example: forum.my-site.com"
+        exit 1
+      fi
+  done
+fi
+
+sudo apt update
+sudo apt-get install yq
+sudo apt-get install jq
+#endregion
+
+#region STEP 2 - Require the Drupal Coder module (which includes Drupal-specific config for PHP lint) and Drush.
+ddev composer require --dev drupal/coder
+ddev composer require drush/drush
+ddev composer install
+#endregion
+
+#region STEP 3 - Setup PHP Code Sniffer by adding scripts composer.json.
+cp .ddev/commands/host/setup_files/phpcs.xml.dist $DDEV_DOCROOT
+jq '.scripts += {
+          "lint:php": [
+                    "vendor/bin/phpcs -i",
+                    "vendor/bin/phpcs --standard=web/phpcs.xml.dist --colors '$DDEV_DOCROOT'/themes/custom",
+                    "vendor/bin/phpcs --standard=web/phpcs.xml.dist --colors '$DDEV_DOCROOT'/modules/custom",
+                    "vendor/bin/phpcs --standard=web/phpcs.xml.dist --colors '$DDEV_DOCROOT'/sites/**/modules",
+                    "vendor/bin/phpcs --standard=web/phpcs.xml.dist --colors '$DDEV_DOCROOT'/sites/**/themes"
+           ]
+          }' composer.json > temp.json && mv temp.json composer.json
+jq '.scripts += {
+          "fix:php": [
+                    "vendor/bin/phpcbf --standard=web/phpcs.xml.dist '$DDEV_DOCROOT'/themes/custom",
+                    "vendor/bin/phpcbf --standard=web/phpcs.xml.dist '$DDEV_DOCROOT'/modules/custom",
+                    "vendor/bin/phpcbf --standard=web/phpcs.xml.dist '$DDEV_DOCROOT'/sites/**/modules",
+                    "vendor/bin/phpcbf --standard=web/phpcs.xml.dist '$DDEV_DOCROOT'/sites/**/themes"
+           ]
+          }' composer.json > temp.json && mv temp.json composer.json
+#endregion
+
+#region STEP 4 - Create and configure custom themes for each site being created.
+THEME_NAME_PREFIX=${DDEV_PROJECT%.*}
+THEME_NAME="${THEME_NAME_PREFIX//-/_}_theme"
+THEME_DIRS=()
+if [ ! -d "$DDEV_DOCROOT/themes/custom/$THEME_NAME" ]; then
+  THEME_PATH="themes/custom"
+  ddev exec "yes | php $DDEV_DOCROOT/core/scripts/drupal generate-theme $THEME_NAME --path $THEME_PATH"
+  THEME_DIRS+=($DDEV_DOCROOT"/"$THEME_PATH"/"$THEME_NAME)
+  yq -i -Y '.main = {"version": "VERSION", "js": {"build/main.js":{}}, "css":{"theme":{"build/styles.css":{}}}}' $DDEV_DOCROOT/$THEME_PATH/$THEME_NAME/$THEME_NAME".libraries.yml"
+fi
+
+if $IS_MULTISITE; then
+      for arg in "$@"; do
+        THEME_NAME_PREFIX=${arg%.*}
+        THEME_NAME="${THEME_NAME_PREFIX//-/_}"
+        THEME_NAME="${THEME_NAME//./_}_theme"
+        if [ ! -d "$DDEV_DOCROOT/sites/$arg/themes/$THEME_NAME" ]; then
+          THEME_PATH="sites/$arg/themes"
+          ddev exec "yes | php $DDEV_DOCROOT/core/scripts/drupal generate-theme $THEME_NAME --path $THEME_PATH"
+#          cp .ddev/commands/host/setup_files/theme_libraries.yml $THEME_PATH/$theme_name/$THEME_NAME"_libraries.yml"
+          yq -i -Y '.main = {"version": "VERSION", "js": {"build/main.js":{}}, "css":{"theme":{"build/styles.css":{}}}}' $DDEV_DOCROOT/$THEME_PATH/$THEME_NAME/$THEME_NAME".libraries.yml"
+          echo $THEME_PATH/$THEME_NAME/$THEME_NAME".libraries.yml"
+          THEME_DIRS+=($DDEV_DOCROOT"/"$THEME_PATH"/"$THEME_NAME)
+        fi
+      done
+fi
+#endregion
+
+#region STEP 5 - Install and configure JS packages for each theme, enable linters for JS and CSS, etc.
+for arg in "${THEME_DIRS[@]}"; do
+  cp .ddev/commands/host/setup_files/package.json $arg
+  cp .ddev/commands/host/setup_files/package-lock.json $arg
+  cp .ddev/commands/host/setup_files/yarn.lock $arg
+  cp .ddev/commands/host/setup_files/.yarnrc.yml $arg
+  cp .ddev/commands/host/setup_files/tailwind.config.js $arg
+  cp .ddev/commands/host/setup_files/tailwind.css $arg"/css"
+  cp .ddev/commands/host/setup_files/postcss.config.js $arg
+  cp .ddev/commands/host/setup_files/webpack.config.js $arg
+  cp .ddev/commands/host/setup_files/.stylelintrc.json $arg
+  cp .ddev/commands/host/setup_files/.eslintrc.json $arg
+  cp .ddev/commands/host/setup_files/.prettierrc.json $arg
+  cp .ddev/commands/host/setup_files/backstop.json $arg
+  backstop_config_id=$(basename "$arg")
+  jq '.id = "'$backstop_config_id'"' $arg/backstop.json > temp.json && mv temp.json "$arg/"$backstop_config_id".backstop.json"
+  mkdir $arg"/js"
+  cp .ddev/commands/host/setup_files/main.js $arg"/js"
+  ddev exec "cd $arg && npm install"
+  ddev exec "cd $arg && yarn install"
+done
+#endregion
+
+#region STEP 6 - Expand the multisite setup - create a db for each site and copy over settings and config files.
+
+# If sites.php is not created yet, we should copy the example and rename it.
+SITES_CONFIG_FILE="$DDEV_DOCROOT/sites/sites.php" # Define the file path
+if ! [[ -f "$SITES_CONFIG_FILE" ]]; then
+    cp $DDEV_DOCROOT/sites/example.sites.php $DDEV_DOCROOT/sites/sites.php
+fi
+
+if $IS_MULTISITE; then
+      COUNTER=0
+      for arg in "$@"; do
+        SITE_NAME_PREFIX=${arg%.*}
+        SITE_NAME_SANITIZED=${arg//-/_}
+        SITE_NAME_SANITIZED=${SITE_NAME_SANITIZED//./_}
+        ddev exec mysql -uroot -proot -e "CREATE DATABASE IF NOT EXISTS $SITE_NAME_SANITIZED; GRANT ALL ON $SITE_NAME_SANITIZED.* TO 'db'@'%';"
+        yq -i -Y '.additional_hostnames['$COUNTER'] = "'$arg'"' .ddev/config.yaml
+        echo "\$sites['$arg.ddev.site'] = '$arg';" >> $DDEV_DOCROOT/sites/sites.php
+        cp .ddev/commands/host/setup_files/settings.ddev.php $DDEV_DOCROOT/sites/$arg
+        cp .ddev/commands/host/setup_files/settings.php $DDEV_DOCROOT/sites/$arg
+        cp .ddev/commands/host/setup_files/settings.local.php $DDEV_DOCROOT/sites/$arg
+        cp .ddev/commands/host/setup_files/default.services.yml $DDEV_DOCROOT/sites/$arg
+        echo "\$databases['default']['default']['database'] = '$SITE_NAME_SANITIZED';" >> $DDEV_DOCROOT/sites/$arg/settings.ddev.php
+        ((COUNTER++))
+      done
+fi
+cp .ddev/commands/host/setup_files/development.services.yml $DDEV_DOCROOT/sites
+cp .ddev/commands/host/setup_files/settings.php $DDEV_DOCROOT/sites/default
+cp .ddev/commands/host/setup_files/settings.local.php $DDEV_DOCROOT/sites/default
+#endregion
+
+#region STEP 7 - Install Browsersync.
+ddev add-on get ddev/ddev-browsersync
+cp .ddev/commands/host/setup_files/browser-sync.cjs .ddev
+cp .ddev/commands/host/setup_files/browsersync .ddev/commands/web
+#endregion
+
+#region STEP 8 - Install BackstopJS, PHPMyAdmin, Solr.
+ddev add-on get mmunz/ddev-backstopjs
+ddev add-on get ddev/ddev-phpmyadmin
+ddev add-on get ddev/ddev-drupal-solr
+ddev restart
+ddev describe
+#endregion
+
+
+

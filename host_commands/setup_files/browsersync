@@ -1,0 +1,21 @@
+#!/bin/bash
+
+#ddev-generated
+## Description: Run browser-sync in the web container
+## Usage: browsersync
+## Example: "ddev browsersync"
+## ExecRaw: true
+
+IFS=',' read -r -a URLS <<< "$DDEV_HOSTNAME"
+counter=0
+for URL in "${URLS[@]}"; do
+  echo "[$counter] $URL"
+  ((counter++))
+done
+
+echo "Press the number of the site you'd like to watch"
+read choice
+echo ${URLS[choice]}
+
+echo "Proxying Browsersync on $(echo ${choice} | sed -E 's/:[0-9]+//'):3000"
+browser-sync start -c /var/www/html/.ddev/browser-sync.cjs --proxy="http://${URLS[choice]}" | grep -v "Access URLs\|--------------------\|Local: http\|External: http"

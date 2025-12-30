@@ -1,0 +1,15 @@
+#!/bin/bash
+
+echo "If it's a multisite setup, enter all the domains separated by space:"
+read -a domains_array
+
+echo "You entered the following domains: ${domains_array[@]}"
+dir_basename="${PWD##*/}"
+
+echo "Creating the standard ddev Drupal 11 project"
+ddev config --project-type=drupal11 --docroot=web --project-name=$dir_basename
+
+cp -a host_commands/. .ddev/commands/host/
+
+echo "Expanding configuration"
+ddev setup ${domains_array[@]}
