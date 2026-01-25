@@ -19,9 +19,9 @@ It automatically creates a theme for each site in a multisite setup, and automat
 Let's suppose you want to setup a Drupal 11 multisite project that includes the domains mysite.com, sub.mysite.com, and othersite.com
 
 You just need to open the directory and run:
-
+```
 ./build-project mysite.com sub.mysite.com othersite.com
-
+```
 This command will:
 - Install Drupal 11 Core
 - Create a multisite setup that includes all 3 domains
